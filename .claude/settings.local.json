@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile ocr/aoo_roster.py)",
+      "Bash(python3 -m py_compile ocr/generate_missing.py)",
+      "Bash(python3 -m py_compile ocr/aoo_summary.py)",
+      "Bash(python3 -m py_compile bot/bot.py)",
+      "Bash(python3 -m py_compile shared/db.py)",
+      "Bash(python3 -m py_compile aoo_scraper.py)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(sqlite3:*)",
+      "Bash(./venv/bin/python:*)",
+      "Bash(./venv/bin/pip install:*)"
+    ]
+  }
+}

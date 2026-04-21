@@ -1,0 +1,24 @@
+[Unit]
+Description=Age of Origins Alliance Stats Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── Update these two paths to match your actual username and project location ──
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/aoo_discord_bot
+
+# Activate the venv and run the bot
+ExecStart=/home/YOUR_USERNAME/aoo_discord_bot/venv/bin/python bot.py
+
+# Restart automatically if it crashes
+Restart=on-failure
+RestartSec=10
+
+# Log output to journald (view with: journalctl -u aoo-bot -f)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
