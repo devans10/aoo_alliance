@@ -59,6 +59,37 @@ def tab_to_text(records: list[list]) -> str:
     return "\n".join(lines)
 
 
+def tab_to_markdown(records: list[list]) -> str:
+    """Convert sheet rows to a markdown table for cleaner Claude interpretation.
+
+    Strips trailing empty cells per row, skips fully-empty rows, and treats
+    the first row as the header.
+    """
+    cleaned = []
+    for row in records:
+        stripped = [str(c) for c in row]
+        while stripped and stripped[-1] == "":
+            stripped.pop()
+        if stripped:
+            cleaned.append(stripped)
+
+    if not cleaned:
+        return "(empty)"
+
+    width = max(len(row) for row in cleaned)
+
+    def md_row(cells: list[str]) -> str:
+        padded = cells + [""] * (width - len(cells))
+        return "| " + " | ".join(padded) + " |"
+
+    lines = [md_row(cleaned[0])]
+    lines.append("| " + " | ".join("---" for _ in range(width)) + " |")
+    for row in cleaned[1:]:
+        lines.append(md_row(row))
+
+    return "\n".join(lines)
+
+
 def get_knowledge_base() -> str:
     """Fetch all tabs from the knowledge base spreadsheet and return them as text.
 
@@ -80,7 +111,7 @@ def get_knowledge_base() -> str:
                 rows = worksheet.get_all_values()
                 if not rows:
                     continue
-                sections.append(f"--- {worksheet.title} ---\n{tab_to_text(rows)}")
+                sections.append(f"--- {worksheet.title} ---\n{tab_to_markdown(rows)}")
             except Exception as e:
                 print(f"⚠️  Skipping KB tab '{worksheet.title}': {e}")
         return "\n\n".join(sections)
