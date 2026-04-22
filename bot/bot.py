@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 # Add project root to path for shared imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import db
+import sheets
 
 load_dotenv()
 
@@ -29,8 +30,21 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# Load the knowledge base once at startup. Since the sheet changes at most monthly,
+# a bot restart is sufficient to pick up any updates.
+_knowledge_base: str = ""
+try:
+    _knowledge_base = sheets.get_knowledge_base()
+    if _knowledge_base:
+        print(f"✅ Knowledge base loaded ({len(_knowledge_base):,} chars)")
+    else:
+        print("⚠️  Knowledge base is empty or unavailable — continuing without it")
+except Exception as e:
+    print(f"⚠️  Knowledge base load failed: {e} — continuing without it")
+
 SYSTEM_PROMPT = """You are the alliance stats bot for an Age of Origins (AoO) mobile game alliance.
 You have access to alliance data from the database, provided to you in each message.
+If a GAME KNOWLEDGE BASE section is present in your context, use it to answer general game questions.
 
 Your job is to answer member questions about:
 - Alliance event participation (Elite War, Void War, Battle Frenzy, Polar Invasion, Wasteland Showdown, Ironblood Battlefield, Chaosland, Global Conquest, Triangle War, Duel of Dominance)
@@ -38,6 +52,7 @@ Your job is to answer member questions about:
 - Percentile rankings and normalised scores
 - Trends — who is improving or declining
 - Roster info
+- General game mechanics, tips, and strategy (use the knowledge base)
 
 Personality:
 - You are snarky, sarcastic, and love to trash talk — like a competitive gamer who's seen it all.
@@ -75,6 +90,26 @@ def build_data_context(data: dict[str, str]) -> str:
     for section_name, content in data.items():
         parts.append(f"=== {section_name} ===\n{content}\n")
     return "\n".join(parts)
+
+
+def build_system_blocks(extra: str = "") -> list[dict]:
+    """Build the system prompt as a list of content blocks.
+
+    The knowledge base block carries cache_control so Anthropic caches the
+    prefix (SYSTEM_PROMPT + KB) across requests — the KB never changes between
+    bot restarts, so the cache hits every time.
+    Per-user directives are appended after the cached block so they don't
+    invalidate it.
+    """
+    base = f"{SYSTEM_PROMPT}\n\n{extra}".strip() if extra else SYSTEM_PROMPT
+    blocks: list[dict] = [{"type": "text", "text": base}]
+    if _knowledge_base:
+        blocks.append({
+            "type": "text",
+            "text": f"=== GAME KNOWLEDGE BASE ===\n{_knowledge_base}",
+            "cache_control": {"type": "ephemeral"},
+        })
+    return blocks
 
 @bot.event
 async def on_ready():
@@ -118,14 +153,14 @@ async def on_message(message: discord.Message):
             # Check for per-user directives
             username = message.author.name.lower()
             extra = USER_DIRECTIVES.get(username, "")
-            system = f"{SYSTEM_PROMPT}\n\n{extra}" if extra else SYSTEM_PROMPT
+            system_blocks = build_system_blocks(extra)
 
             user_message = f"Alliance data:\n\n{data_context}\n\n---\nMember question (from {message.author.name}): {question}"
 
             response = claude.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=512,
-                system=system,
+                system=system_blocks,
                 messages=[{"role": "user", "content": user_message}],
             )
 
