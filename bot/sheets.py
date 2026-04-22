@@ -17,7 +17,6 @@ SPREADSHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 # Knowledge base sheet config — can be a different spreadsheet from the alliance data.
 # KNOWLEDGE_BASE_SHEET_ID defaults to GOOGLE_SHEET_ID if unset (i.e. a tab in the same sheet).
 KB_SHEET_ID = os.environ.get("KNOWLEDGE_BASE_SHEET_ID") or SPREADSHEET_ID
-KB_TAB = os.environ.get("KNOWLEDGE_BASE_TAB", "Knowledge Base")
 
 # Scopes needed for read-only Sheets access
 SCOPES = [
@@ -61,10 +60,12 @@ def tab_to_text(records: list[list]) -> str:
 
 
 def get_knowledge_base() -> str:
-    """Fetch the knowledge base tab and return it as plain text.
+    """Fetch all tabs from the knowledge base spreadsheet and return them as text.
 
-    Controlled by KNOWLEDGE_BASE_SHEET_ID (defaults to GOOGLE_SHEET_ID)
-    and KNOWLEDGE_BASE_TAB (defaults to "Knowledge Base").
+    Each tab becomes a labelled section so Claude knows which topic area it
+    belongs to.  New tabs are picked up automatically on the next bot restart.
+
+    Controlled by KNOWLEDGE_BASE_SHEET_ID (defaults to GOOGLE_SHEET_ID).
     Returns an empty string on any error so the bot degrades gracefully.
     """
     if not KB_SHEET_ID:
@@ -73,12 +74,16 @@ def get_knowledge_base() -> str:
     client = gspread.authorize(creds)
     try:
         spreadsheet = client.open_by_key(KB_SHEET_ID)
-        worksheet = spreadsheet.worksheet(KB_TAB)
-        rows = worksheet.get_all_values()
-        return tab_to_text(rows)
-    except gspread.exceptions.WorksheetNotFound:
-        print(f"⚠️  Knowledge base tab '{KB_TAB}' not found in sheet {KB_SHEET_ID}")
-        return ""
+        sections: list[str] = []
+        for worksheet in spreadsheet.worksheets():
+            try:
+                rows = worksheet.get_all_values()
+                if not rows:
+                    continue
+                sections.append(f"--- {worksheet.title} ---\n{tab_to_text(rows)}")
+            except Exception as e:
+                print(f"⚠️  Skipping KB tab '{worksheet.title}': {e}")
+        return "\n\n".join(sections)
     except Exception as e:
         print(f"⚠️  Error reading knowledge base: {e}")
         return ""
