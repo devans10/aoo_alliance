@@ -168,6 +168,49 @@ def do_add_alias(conn):
     show_member_detail(conn, member_id)
 
 
+def do_remove_alias(conn):
+    """Remove an alias (non-current name) from a member."""
+    print("\n=== Remove Alias ===\n")
+
+    member_id = pick_member(conn)
+    if member_id is None:
+        return
+
+    show_member_detail(conn, member_id)
+
+    # Get non-current names (aliases) for this member
+    aliases = conn.execute("""
+        SELECT id, name, clean_name, from_date
+        FROM member_names
+        WHERE member_id = ? AND is_current = 0
+        ORDER BY from_date
+    """, (member_id,)).fetchall()
+
+    if not aliases:
+        print("  This member has no aliases to remove.\n")
+        return
+
+    print("  Aliases:")
+    for i, a in enumerate(aliases, 1):
+        print(f"    {i}. {a['name']} [{a['clean_name']}] from {a['from_date']}")
+
+    choice = input("\n  Select alias number to remove (or Enter to cancel): ").strip()
+    if not choice.isdigit() or not (1 <= int(choice) <= len(aliases)):
+        print("  Cancelled.\n")
+        return
+
+    alias = aliases[int(choice) - 1]
+    confirm = input(f"  Remove alias '{alias['name']}'? (y/N): ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("  Cancelled.\n")
+        return
+
+    conn.execute("DELETE FROM member_names WHERE id = ?", (alias['id'],))
+    conn.commit()
+    print(f"  Done — alias '{alias['name']}' removed.\n")
+    show_member_detail(conn, member_id)
+
+
 def do_merge(conn):
     """Merge a duplicate member into the original, keeping all data."""
     print("\n=== Merge Duplicate Members ===\n")
@@ -270,6 +313,16 @@ def do_merge(conn):
                 VALUES (?, ?, ?, ?, 0)
             """, (keep_id, name_row["name"], clean, today))
 
+    # Re-point any review_queue FK references from the duplicate to the kept member
+    conn.execute("""
+        UPDATE review_queue SET suggested_member_id = ?
+        WHERE suggested_member_id = ?
+    """, (keep_id, dup_id))
+    conn.execute("""
+        UPDATE review_queue SET resolved_member_id = ?
+        WHERE resolved_member_id = ?
+    """, (keep_id, dup_id))
+
     # Remove duplicate's name entries and the member record
     conn.execute("DELETE FROM member_names WHERE member_id = ?", (dup_id,))
     conn.execute("DELETE FROM members WHERE id = ?", (dup_id,))
@@ -299,7 +352,7 @@ def do_review_queue(conn):
     """Show and resolve pending review queue items."""
     print("\n=== Review Queue ===\n")
 
-    items = conn.execute("""
+    rows = conn.execute("""
         SELECT rq.id, rq.scraped_name, rq.reason, rq.match_confidence,
                rq.suggested_member_id, m.name AS suggested_name
         FROM review_queue rq
@@ -307,6 +360,12 @@ def do_review_queue(conn):
         WHERE rq.resolved = 0
         ORDER BY rq.created_at
     """).fetchall()
+    # Strip null characters that OCR may introduce — they break input() prompts
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["scraped_name"] = item["scraped_name"].replace("\x00", "")
+        items.append(item)
 
     if not items:
         print("  No pending review items.\n")
@@ -382,9 +441,11 @@ def main_menu():
         while True:
             print("  1. Rename member")
             print("  2. Add alias")
-            print("  3. Merge duplicates")
-            print("  4. Review queue")
-            print("  5. Look up member")
+            print("  3. Remove alias")
+            print("  4. Merge duplicates")
+            print("  5. Review queue")
+            print("  6. Look up member")
+            print("  7. Refresh aggregations")
             print("  q. Quit")
             choice = input("\n  Choice: ").strip().lower()
 
@@ -393,13 +454,19 @@ def main_menu():
             elif choice == '2':
                 do_add_alias(conn)
             elif choice == '3':
-                do_merge(conn)
+                do_remove_alias(conn)
             elif choice == '4':
-                do_review_queue(conn)
+                do_merge(conn)
             elif choice == '5':
+                do_review_queue(conn)
+            elif choice == '6':
                 member_id = pick_member(conn)
                 if member_id:
                     show_member_detail(conn, member_id)
+            elif choice == '7':
+                print("\n  Refreshing aggregations...")
+                db.refresh_aggregations()
+                print("  Done.\n")
             elif choice in ('q', 'quit', 'exit'):
                 print("  Bye.\n")
                 break

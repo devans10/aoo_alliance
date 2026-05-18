@@ -1,14 +1,16 @@
 """
 export_csv.py — Export alliance DB to CSV files for Google Sheets import.
 
-Produces two CSV files in the exports/ directory:
-  - roster.csv      — Current member roster with latest stats
-  - event_log.csv   — All event results (one row per member per event)
+Produces three CSV files in the exports/ directory:
+  - roster.csv         — Current member roster with latest stats
+  - event_log.csv      — All event results (one row per member per event)
+  - event_summary.csv  — Per-event participation summary
 
 Usage:
-    ./venv/bin/python export_csv.py              # export both
-    ./venv/bin/python export_csv.py --roster     # roster only
-    ./venv/bin/python export_csv.py --events     # event log only
+    ./venv/bin/python export_csv.py                # export all
+    ./venv/bin/python export_csv.py --roster       # roster only
+    ./venv/bin/python export_csv.py --events       # event log only
+    ./venv/bin/python export_csv.py --summary      # event summary only
 """
 
 import argparse
@@ -30,7 +32,6 @@ def export_roster(out_path: Path):
             SELECT
                 m.id,
                 m.name,
-                m.status,
                 m.position,
                 m.city_level       AS "City Level",
                 m.battle_power     AS "Battle Power",
@@ -54,17 +55,12 @@ def export_roster(out_path: Path):
             FROM members m
             LEFT JOIN member_summary ms
                 ON ms.member_id = m.id AND ms.period = '30d'
-            ORDER BY
-                CASE m.status
-                    WHEN 'active' THEN 0
-                    WHEN 'inactive' THEN 1
-                    ELSE 2
-                END,
-                m.name COLLATE NOCASE
+            WHERE m.status = 'active'
+            ORDER BY m.name COLLATE NOCASE
         """).fetchall()
 
         headers = [
-            "ID", "Name", "Status", "Position",
+            "ID", "Name", "Position",
             "City Level", "Battle Power", "Reputation",
             "Kills", "Losses",
             "Officer Power", "Titan Power", "Warplane Power",
@@ -79,7 +75,7 @@ def export_roster(out_path: Path):
             writer.writerow(headers)
             for r in rows:
                 writer.writerow([
-                    r["id"], r["name"], r["status"], r["position"],
+                    r["id"], r["name"], r["position"],
                     r["City Level"], r["Battle Power"], r["Reputation"],
                     r["Kills"], r["Losses"],
                     r["Officer Power"], r["Titan Power"], r["Warplane Power"],
@@ -117,7 +113,7 @@ def export_event_log(out_path: Path):
 
         headers = [
             "Member Name", "Event Type", "Event Date",
-            "Score", "Percentile", "% vs Mean", "Source",
+            "Battle Score", "Attendance", "Percentile", "% vs Mean", "Source",
         ]
 
         with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -129,6 +125,7 @@ def export_event_log(out_path: Path):
                     r["Event Type"],
                     r["Event Date"],
                     r["Score"],
+                    "Present",
                     r["Percentile"],
                     r["% vs Mean"],
                     r["Source"],
@@ -139,10 +136,68 @@ def export_event_log(out_path: Path):
         conn.close()
 
 
+def export_event_summary(out_path: Path):
+    """Export per-event participation summary."""
+    conn = db.get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT
+                e.id            AS event_id,
+                e.event_type    AS "Event Type",
+                e.occurred_at   AS "Event Date",
+                COUNT(er.id)    AS "Participants",
+                (SELECT COUNT(*) FROM members
+                 WHERE status = 'active'
+                   OR id IN (SELECT member_id FROM event_results WHERE event_id = e.id)
+                ) AS "Active Members",
+                ROUND(
+                    COUNT(er.id) * 100.0 /
+                    NULLIF((SELECT COUNT(*) FROM members
+                            WHERE status = 'active'
+                              OR id IN (SELECT member_id FROM event_results WHERE event_id = e.id)
+                    ), 0),
+                    1
+                ) AS "Participation Rate",
+                ROUND(AVG(er.score), 0) AS "Avg Score",
+                MAX(er.score)           AS "High Score",
+                MIN(er.score)           AS "Low Score"
+            FROM events e
+            LEFT JOIN event_results er ON er.event_id = e.id
+            GROUP BY e.id
+            ORDER BY e.occurred_at, e.event_type
+        """).fetchall()
+
+        headers = [
+            "Event Type", "Event Date",
+            "Participants", "Active Members", "Participation Rate",
+            "Avg Score", "High Score", "Low Score",
+        ]
+
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for r in rows:
+                writer.writerow([
+                    r["Event Type"],
+                    r["Event Date"],
+                    r["Participants"],
+                    r["Active Members"],
+                    r["Participation Rate"],
+                    r["Avg Score"],
+                    r["High Score"],
+                    r["Low Score"],
+                ])
+
+        print(f"  Event Summary: {len(rows)} events → {out_path}")
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export alliance DB to CSV for Google Sheets")
     parser.add_argument("--roster", action="store_true", help="Export roster only")
     parser.add_argument("--events", action="store_true", help="Export event log only")
+    parser.add_argument("--summary", action="store_true", help="Export event summary only")
     parser.add_argument("--out-dir", type=str, default=str(EXPORT_DIR),
                         help=f"Output directory (default: {EXPORT_DIR})")
     args = parser.parse_args()
@@ -150,15 +205,17 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    export_both = not args.roster and not args.events
+    export_all = not args.roster and not args.events and not args.summary
 
     db.init_db()
 
     print()
-    if export_both or args.roster:
+    if export_all or args.roster:
         export_roster(out_dir / "roster.csv")
-    if export_both or args.events:
+    if export_all or args.events:
         export_event_log(out_dir / "event_log.csv")
+    if export_all or args.summary:
+        export_event_summary(out_dir / "event_summary.csv")
     print()
 
 
